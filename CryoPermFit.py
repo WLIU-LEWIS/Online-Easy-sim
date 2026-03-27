@@ -1,3 +1,4 @@
+import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -6,73 +7,27 @@ from scipy.optimize import least_squares
 
 
 # =========================
-# Experimental data
-# =========================
-expdata = np.array([
-    [267.99, 181.84],
-    [267.15, 178.1667916],
-    [266.15, 169.1173019],
-    [265.15, 165.6389179],
-    [264.15, 158.7959802],
-    [263.15, 153.0628855],
-    [262.15, 148.6300803],
-    [261.15, 145.4603510],
-    [260.15, 142.0739067],
-    [259.15, 139.1362156],
-    [258.15, 136.3911599],
-    [257.15, 133.6439152],
-    [256.15, 130.7784624],
-    [255.15, 127.8101247],
-    [254.15, 124.9271595],
-    [253.15, 122.1842929],
-    [252.15, 119.7128672],
-    [251.15, 117.5194495],
-    [250.15, 115.5033441],
-    [249.15, 113.7302220],
-    [248.15, 112.3445599],
-    [247.15, 111.2478511],
-    [246.15, 110.4510407],
-    [245.15, 109.9891533],
-    [244.15, 109.8490548],
-], dtype=float)
-
-t_exp = expdata[:, 0]
-y_exp = expdata[:, 1]
-
-x0 = np.array([181.84], dtype=float)
-
-# MATLAB initial guess
-k0 = np.array([5.68037900e-08, 8.74400015e+04], dtype=float)
-
-
-# =========================
-# ODE function
+# ODE model
 # =========================
 def kinetic_eqs(t, y, k):
-    """
-    y: cell volume
-    k[0] = a
-    k[1] = b
-    """
-    c = 155.22          # effective membrane area for water transport
-    d = 8.314           # gas constant
-    e = 5.0             # cooling rate
-    f = 18e12           # partial molar volume of water
-    g = 109.86          # osmotically inactive cell volume
-    h = 2.0             # salt dissociation constant
-    ii = 3.33e-13       # intracellular salt molar amount
-    jj = 333.88         # latent heat of fusion of ice
-    kk = 1e-12          # water density
-    l = 273.15          # reference temperature
-    m = 4.66e-14        # intracellular CPA moles
-    p = 7.103e13        # partial molar volume of CPA
+    c = 155.22
+    d = 8.314
+    e = 5.0
+    f = 18e12
+    g = 109.86
+    h = 2.0
+    ii = 3.33e-13
+    jj = 333.88
+    kk = 1e-12
+    l = 273.15
+    m = 4.66e-14
+    p = 7.103e13
 
     vol = y[0]
 
     numerator = vol - g - m * p
     denominator = vol - g - m * p + h * ii / f
 
-    # protect against invalid log/division
     eps = 1e-12
     if numerator <= eps:
         numerator = eps
@@ -97,21 +52,21 @@ def kinetic_eqs(t, y, k):
 # =========================
 # Simulation
 # =========================
-def simulate(k, t_eval, x0, method="RK45"):
+def simulate(k, t_eval, x0):
     sol = solve_ivp(
         fun=lambda t, y: kinetic_eqs(t, y, k),
         t_span=(t_eval[0], t_eval[-1]),
         y0=x0,
         t_eval=t_eval,
-        method=method,
+        method="RK45",
         rtol=1e-8,
         atol=1e-10
     )
 
     if not sol.success:
-        raise RuntimeError(f"ODE solver failed: {sol.message}")
+        raise RuntimeError(sol.message)
 
-    return sol.t, sol.y.T  # shape: (n_points, 1)
+    return sol.t, sol.y.T
 
 
 # =========================
@@ -138,72 +93,174 @@ def calc_statistics(y_true, y_pred):
     R2 = 1 - np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2)
     RMSE = np.sqrt(np.mean((y_true - y_pred) ** 2))
     SSE = np.sum((y_true - y_pred) ** 2)
-
-    return {
-        "R": R,
-        "R2": R2,
-        "RMSE": RMSE,
-        "SSE": SSE
-    }
+    return R, R2, RMSE, SSE
 
 
 # =========================
-# Main fitting function
+# Parse pasted data
 # =========================
-def fit_model():
-    result = least_squares(
-        fun=objective_function,
-        x0=k0,
-        args=(t_exp, y_exp, x0),
-        method="trf",
-        max_nfev=10000
-    )
+def parse_pasted_data(text):
+    text = text.strip()
+    if not text:
+        raise ValueError("No data pasted.")
 
-    k_fit = result.x
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    rows = []
 
-    t_fit, X_fit = simulate(k_fit, t_exp, x0)
-    y_fit = X_fit[:, 0]
+    for line in lines:
+        if "\t" in line:
+            parts = line.split("\t")
+        elif "," in line:
+            parts = line.split(",")
+        else:
+            parts = line.split()
 
-    stats = calc_statistics(y_exp, y_fit)
+        if len(parts) < 2:
+            continue
 
-    print("\nEstimated parameters:")
-    print(f"a = {k_fit[0]:.8e}")
-    print(f"b = {k_fit[1]:.8e}")
+        try:
+            t_val = float(parts[0])
+            y_val = float(parts[1])
+            rows.append([t_val, y_val])
+        except ValueError:
+            continue
 
-    print("\nFitting statistics:")
-    print(f"R    = {stats['R']:.8f}")
-    print(f"R^2  = {stats['R2']:.8f}")
-    print(f"RMSE = {stats['RMSE']:.8f}")
-    print(f"SSE  = {stats['SSE']:.8f}")
+    if len(rows) < 2:
+        raise ValueError("Need at least two valid numeric rows.")
 
-    # Plot
-    T_model = t_fit - 273.15
-    V_model = y_fit / 181.84
-    T_exp_c = t_exp - 273.15
-    V_exp = y_exp / 181.84
-
-    plt.figure(figsize=(7, 5))
-    plt.plot(T_model, V_model, 'b-', label=f"Model simulation (R²={stats['R2']:.4f})")
-    plt.plot(T_exp_c, V_exp, 'ro', label="DSC data")
-    plt.xlabel("Temperature (°C)")
-    plt.ylabel("Normalized Cell Volume (V/V0)")
-    plt.gca().invert_xaxis()
-    plt.ylim([0.5, 1.1])
-    plt.legend(loc="best")
-    plt.tight_layout()
-    plt.show()
-
-    # Export to Excel
-    export_df = pd.DataFrame({
-        "T_model_C": T_model,
-        "V_model_norm": V_model,
-        "T_exp_C": T_exp_c,
-        "V_exp_norm": V_exp
-    })
-    #export_df.to_excel("abd.xlsx", index=False)
-
-    return result, k_fit, stats, export_df
+    return pd.DataFrame(rows, columns=["Temperature_K", "Volume"])
 
 
-if __name__ == "__main__":
-    fit_model()
+# =========================
+# Streamlit UI
+# =========================
+st.set_page_config(page_title="CryoPermFit", layout="wide")
+
+st.title("CryoPermFit")
+st.write("A tool for estimating osmotic transport parameters of cells at cryogenic conditions.")
+
+st.sidebar.header("Model parameters")
+
+a0 = st.sidebar.number_input("Initial guess: a", value=5.68037900e-08, format="%.8e")
+b0 = st.sidebar.number_input("Initial guess: b", value=8.74400015e+04, format="%.8e")
+V0 = st.sidebar.number_input("Initial volume x0", value=181.84, format="%.5f")
+
+default_text = """267.99\t181.84
+267.15\t178.1667916
+266.15\t169.1173019
+265.15\t165.6389179
+264.15\t158.7959802
+263.15\t153.0628855
+262.15\t148.6300803
+261.15\t145.460351
+260.15\t142.0739067
+259.15\t139.1362156
+258.15\t136.3911599
+257.15\t133.6439152
+256.15\t130.7784624
+255.15\t127.8101247
+254.15\t124.9271595
+253.15\t122.1842929
+252.15\t119.7128672
+251.15\t117.5194495
+250.15\t115.5033441
+249.15\t113.730222
+248.15\t112.3445599
+247.15\t111.2478511
+246.15\t110.4510407
+245.15\t109.9891533
+244.15\t109.8490548"""
+
+st.subheader("Paste experimental data")
+st.caption("Paste two columns: Temperature(K) and Volume. Supports tab, comma, or space separated values.")
+
+data_text = st.text_area("Data", value=default_text, height=320)
+
+run_fit = st.button("Start Fitting")
+
+if run_fit:
+    try:
+        data = parse_pasted_data(data_text)
+        t_exp = data["Temperature_K"].values
+        y_exp = data["Volume"].values
+        x0 = np.array([V0], dtype=float)
+        k0 = np.array([a0, b0], dtype=float)
+
+        with st.spinner("Running fitting..."):
+            result = least_squares(
+                fun=objective_function,
+                x0=k0,
+                args=(t_exp, y_exp, x0),
+                method="trf",
+                max_nfev=10000
+            )
+
+            k_fit = result.x
+            _, X_fit = simulate(k_fit, t_exp, x0)
+            y_fit = X_fit[:, 0]
+
+            R, R2, RMSE, SSE = calc_statistics(y_exp, y_fit)
+
+        st.success("Fitting completed.")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("Fitted parameters")
+            st.dataframe(pd.DataFrame({
+                "Parameter": ["a", "b"],
+                "Value": [k_fit[0], k_fit[1]]
+            }))
+
+        with col2:
+            st.subheader("Statistics")
+            st.dataframe(pd.DataFrame({
+                "Metric": ["R", "R²", "RMSE", "SSE"],
+                "Value": [R, R2, RMSE, SSE]
+            }))
+
+        T_model = t_exp - 273.15
+        V_model = y_fit / V0
+        T_exp_c = t_exp - 273.15
+        V_exp = y_exp / V0
+
+        fig1, ax1 = plt.subplots(figsize=(7, 5))
+        ax1.plot(T_model, V_model, 'b-', label=f"Model simulation (R²={R2:.4f})")
+        ax1.plot(T_exp_c, V_exp, 'ro', label="DSC data")
+        ax1.set_xlabel("Temperature (°C)")
+        ax1.set_ylabel("Normalized Cell Volume (V/V0)")
+        ax1.set_ylim([0.5, 1.1])
+        ax1.invert_xaxis()
+        ax1.legend(loc="best")
+        st.pyplot(fig1)
+
+        residual = y_exp - y_fit
+        fig2, ax2 = plt.subplots(figsize=(7, 4))
+        ax2.plot(T_exp_c, residual, 'ko-')
+        ax2.axhline(0, linestyle="--")
+        ax2.set_xlabel("Temperature (°C)")
+        ax2.set_ylabel("Residual")
+        ax2.invert_xaxis()
+        st.pyplot(fig2)
+
+        export_df = pd.DataFrame({
+            "T_model_C": T_model,
+            "V_model_norm": V_model,
+            "T_exp_C": T_exp_c,
+            "V_exp_norm": V_exp,
+            "Residual": residual
+        })
+
+        st.subheader("Fitted data")
+        st.dataframe(export_df)
+
+        csv_data = export_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download fitted data as CSV",
+            data=csv_data,
+            file_name="CryoPermFit_results.csv",
+            mime="text/csv"
+        )
+
+    except Exception as e:
+        st.error(f"Error: {e}")
