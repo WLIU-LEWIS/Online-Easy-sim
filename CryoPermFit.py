@@ -224,7 +224,7 @@ if run_fit:
         T_exp_c = t_exp - 273.15
         V_exp = y_exp / V0
 
-        fig1, ax1 = plt.subplots(figsize=(7, 5))
+        fig1, ax1 = plt.subplots(figsize=(3, 5))
         ax1.plot(T_model, V_model, 'b-', label=f"Model simulation (R²={R2:.4f})")
         ax1.plot(T_exp_c, V_exp, 'ro', label="DSC data")
         ax1.set_xlabel("Temperature (°C)")
@@ -235,7 +235,7 @@ if run_fit:
         st.pyplot(fig1)
 
         residual = y_exp - y_fit
-        fig2, ax2 = plt.subplots(figsize=(7, 4))
+        fig2, ax2 = plt.subplots(figsize=(3, 4))
         ax2.plot(T_exp_c, residual, 'ko-')
         ax2.axhline(0, linestyle="--")
         ax2.set_xlabel("Temperature (°C)")
