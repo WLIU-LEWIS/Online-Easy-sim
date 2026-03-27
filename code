@@ -1,0 +1,161 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+from scipy.optimize import least_squares
+
+
+# =========================
+# ODE model
+# =========================
+def kinetic_eqs(t, x, k):
+    a = 513.098453785684
+    r = 0.082057338 * 10**15
+    tt = 283.15
+    mne = 0.3 * 10**(-15)
+    mn0 = 0.3 * 10**(-15)
+    v0 = 590.05351792762
+    vb = 385.487547
+    vs0 = 0
+    sigma = 0.6
+    mse = 2 * 10**(-15)
+    vsm = 0.071 * 10**15
+
+    V = x[0]
+    Nsi = x[1]
+
+    vs = vsm * Nsi
+
+    denom1 = V - vb - vs
+    denom2 = V - vb - vs - 0.0166 * 10**15 * 0.3 * 10**(-15) * v0
+
+    denom1 = denom1 if abs(denom1) > 1e-12 else 1e-12
+    denom2 = denom2 if abs(denom2) > 1e-12 else 1e-12
+
+    mni = mn0 * (v0 - vb - vs0) / denom1
+
+    dVdt = (
+        k[0] * a * r * tt *
+        (mni - mne + sigma * (Nsi / denom2 - mse))
+        + vb + vs + 0.0166 * 10**15 * 0.3 * 10**(-15) * v0
+    )
+
+    dNsidt = k[1] * a * (mse - Nsi / denom2)
+
+    return [dVdt, dNsidt]
+
+
+# =========================
+# Simulation
+# =========================
+def simulate(k, t_eval, x0):
+    sol = solve_ivp(
+        lambda t, x: kinetic_eqs(t, x, k),
+        (t_eval[0], t_eval[-1]),
+        x0,
+        t_eval=t_eval,
+        method='RK45',
+        rtol=1e-8,
+        atol=1e-10
+    )
+    return sol.y.T
+
+
+# =========================
+# Objective function
+# =========================
+def objective(k, t, y, x0):
+    try:
+        X = simulate(k, t, x0)
+        if np.any(np.isnan(X)):
+            return np.ones_like(y) * 1e6
+        return X[:, 0] - y
+    except:
+        return np.ones_like(y) * 1e6
+
+
+# =========================
+# Streamlit UI
+# =========================
+st.title("Cell Volume Model Fitting Tool")
+
+st.sidebar.header("Input parameters")
+
+Lp0 = st.sidebar.number_input("Initial Lp", value=0.5)
+Ps0 = st.sidebar.number_input("Initial Ps", value=5.0)
+
+Lp_lb = st.sidebar.number_input("Lp lower bound", value=0.001)
+Ps_lb = st.sidebar.number_input("Ps lower bound", value=0.1)
+
+Lp_ub = st.sidebar.number_input("Lp upper bound", value=1.0)
+Ps_ub = st.sidebar.number_input("Ps upper bound", value=20.0)
+
+V0 = st.sidebar.number_input("Initial V", value=590.0535179)
+Nsi0 = st.sidebar.number_input("Initial Nsi", value=0.0)
+
+
+# =========================
+# Upload data
+# =========================
+uploaded_file = st.file_uploader("Upload CSV (columns: time, V)")
+
+if uploaded_file:
+    data = pd.read_csv(uploaded_file)
+    t = data.iloc[:, 0].values
+    y = data.iloc[:, 1].values
+
+    st.write("Preview data:")
+    st.write(data.head())
+
+    if st.button("Run Fitting"):
+
+        k0 = np.array([Lp0, Ps0])
+        lb = np.array([Lp_lb, Ps_lb])
+        ub = np.array([Lp_ub, Ps_ub])
+        x0 = np.array([V0, Nsi0])
+
+        result = least_squares(
+            objective,
+            k0,
+            bounds=(lb, ub),
+            args=(t, y, x0),
+            max_nfev=5000
+        )
+
+        k = result.x
+        X = simulate(k, t, x0)
+        y_fit = X[:, 0]
+
+        # stats
+        R = np.corrcoef(y, y_fit)[0, 1]
+        R2 = 1 - np.sum((y - y_fit)**2) / np.sum((y - np.mean(y))**2)
+        RMSE = np.sqrt(np.mean((y - y_fit)**2))
+        SSE = np.sum((y - y_fit)**2)
+
+        st.success("Fitting completed!")
+
+        st.write("### Parameters")
+        st.write({"Lp": k[0], "Ps": k[1]})
+
+        st.write("### Statistics")
+        st.write({"R": R, "R²": R2, "RMSE": RMSE, "SSE": SSE})
+
+        # plot
+        t_smooth = np.linspace(t.min(), t.max(), 200)
+        y_smooth = simulate(k, t_smooth, x0)[:, 0]
+
+        fig, ax = plt.subplots()
+        ax.plot(t_smooth, y_smooth)
+        ax.scatter(t, y)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("V")
+        ax.set_title("Fitting result")
+        st.pyplot(fig)
+
+        # residual
+        fig2, ax2 = plt.subplots()
+        ax2.plot(t, y - y_fit, 'o-')
+        ax2.axhline(0)
+        ax2.set_title("Residual")
+        st.pyplot(fig2)
