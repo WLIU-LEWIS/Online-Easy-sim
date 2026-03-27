@@ -7,21 +7,35 @@ from scipy.optimize import least_squares
 
 
 # =========================
+# Page config
+# =========================
+st.set_page_config(
+    page_title="CryoPermFit",
+    layout="wide"
+)
+
+
+# =========================
 # ODE model
 # =========================
 def kinetic_eqs(t, y, k):
-    c = 155.22
-    d = 8.314
-    e = 5.0
-    f = 18e12
-    g = 109.86
-    h = 2.0
-    ii = 3.33e-13
-    jj = 333.88
-    kk = 1e-12
-    l = 273.15
-    m = 4.66e-14
-    p = 7.103e13
+    """
+    y[0]: cell volume
+    k[0]: a
+    k[1]: b
+    """
+    c = 155.22          # effective membrane area for water transport
+    d = 8.314           # gas constant
+    e = 5.0             # cooling rate
+    f = 18e12           # partial molar volume of water
+    g = 109.86          # osmotically inactive cell volume
+    h = 2.0             # salt dissociation constant
+    ii = 3.33e-13       # intracellular salt molar amount
+    jj = 333.88         # latent heat of fusion of ice
+    kk = 1e-12          # water density
+    l = 273.15          # reference temperature
+    m = 4.66e-14        # intracellular CPA moles
+    p = 7.103e13        # partial molar volume of CPA
 
     vol = y[0]
 
@@ -123,28 +137,19 @@ def parse_pasted_data(text):
             y_val = float(parts[1])
             rows.append([t_val, y_val])
         except ValueError:
+            # skip header or invalid rows
             continue
 
     if len(rows) < 2:
         raise ValueError("Need at least two valid numeric rows.")
 
-    return pd.DataFrame(rows, columns=["Temperature_K", "Volume"])
+    df = pd.DataFrame(rows, columns=["Temperature_K", "Volume"])
+    return df
 
 
 # =========================
-# Streamlit UI
+# Default experimental data
 # =========================
-st.set_page_config(page_title="CryoPermFit", layout="wide")
-
-st.title("CryoPermFit")
-st.write("A tool for estimating osmotic transport parameters of cells at cryogenic conditions.")
-
-st.sidebar.header("Model parameters")
-
-a0 = st.sidebar.number_input("Initial guess: a", value=5.68037900e-08, format="%.8e")
-b0 = st.sidebar.number_input("Initial guess: b", value=8.74400015e+04, format="%.8e")
-V0 = st.sidebar.number_input("Initial volume x0", value=181.84, format="%.5f")
-
 default_text = """267.99\t181.84
 267.15\t178.1667916
 266.15\t169.1173019
@@ -171,18 +176,58 @@ default_text = """267.99\t181.84
 245.15\t109.9891533
 244.15\t109.8490548"""
 
+
+# =========================
+# UI
+# =========================
+st.title("CryoPermFit")
+st.write("A tool for estimating osmotic transport parameters of cells at cryogenic conditions.")
+
+st.sidebar.header("Input parameters")
+
+a0 = st.sidebar.number_input(
+    "Initial guess: a",
+    value=5.68037900e-08,
+    format="%.8e"
+)
+
+b0 = st.sidebar.number_input(
+    "Initial guess: b",
+    value=8.74400015e+04,
+    format="%.8e"
+)
+
+V0 = st.sidebar.number_input(
+    "Initial volume x0",
+    value=181.84,
+    format="%.5f"
+)
+
 st.subheader("Paste experimental data")
 st.caption("Paste two columns: Temperature(K) and Volume. Supports tab, comma, or space separated values.")
 
-data_text = st.text_area("Data", value=default_text, height=320)
+data_text = st.text_area(
+    "Data",
+    value=default_text,
+    height=320
+)
 
 run_fit = st.button("Start Fitting")
 
+
+# =========================
+# Run fitting
+# =========================
 if run_fit:
     try:
         data = parse_pasted_data(data_text)
         t_exp = data["Temperature_K"].values
         y_exp = data["Volume"].values
+
+        if len(t_exp) < 2:
+            st.error("Please provide at least two rows of valid data.")
+            st.stop()
+
         x0 = np.array([V0], dtype=float)
         k0 = np.array([a0, b0], dtype=float)
 
@@ -203,69 +248,80 @@ if run_fit:
 
         st.success("Fitting completed.")
 
+        stat_col1, stat_col2 = st.columns(2)
+
+        with stat_col1:
+            st.subheader("Fitted parameters")
+            st.dataframe(
+                pd.DataFrame({
+                    "Parameter": ["a", "b"],
+                    "Value": [k_fit[0], k_fit[1]]
+                }),
+                use_container_width=True
+            )
+
+        with stat_col2:
+            st.subheader("Statistics")
+            st.dataframe(
+                pd.DataFrame({
+                    "Metric": ["R", "R²", "RMSE", "SSE"],
+                    "Value": [R, R2, RMSE, SSE]
+                }),
+                use_container_width=True
+            )
+
+        # Prepare plotting data
+        T_model_c = t_exp - 273.15
+        V_model_norm = y_fit / V0
+        T_exp_c = t_exp - 273.15
+        V_exp_norm = y_exp / V0
+        residual = y_exp - y_fit
+
+        st.subheader("Fitting Results")
+
+        # ===== Figure 1 =====
+        fig1, ax1 = plt.subplots(figsize=(5, 3.2))
+        ax1.plot(T_model_c, V_model_norm, 'b-', linewidth=1.8, label=f"Model simulation (R²={R2:.4f})")
+        ax1.plot(T_exp_c, V_exp_norm, 'ro', markersize=5, label="DSC data")
+        ax1.set_xlabel("Temperature (°C)", fontsize=10)
+        ax1.set_ylabel("Normalized Cell Volume (V/V0)", fontsize=10)
+        ax1.set_ylim([0.5, 1.1])
+        ax1.invert_xaxis()
+        ax1.tick_params(labelsize=9)
+        ax1.legend(fontsize=9, loc="best")
+        fig1.tight_layout()
+
+        # ===== Figure 2 =====
+        fig2, ax2 = plt.subplots(figsize=(5, 3.2))
+        ax2.plot(T_exp_c, residual, 'ko-', linewidth=1.4, markersize=4)
+        ax2.axhline(0, linestyle="--", linewidth=1.2)
+        ax2.set_xlabel("Temperature (°C)", fontsize=10)
+        ax2.set_ylabel("Residual", fontsize=10)
+        ax2.invert_xaxis()
+        ax2.tick_params(labelsize=9)
+        fig2.tight_layout()
+
+        # ===== Side-by-side display =====
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("Fitted parameters")
-            st.dataframe(pd.DataFrame({
-                "Parameter": ["a", "b"],
-                "Value": [k_fit[0], k_fit[1]]
-            }))
+            st.pyplot(fig1, use_container_width=True)
 
         with col2:
-            st.subheader("Statistics")
-            st.dataframe(pd.DataFrame({
-                "Metric": ["R", "R²", "RMSE", "SSE"],
-                "Value": [R, R2, RMSE, SSE]
-            }))
+            st.pyplot(fig2, use_container_width=True)
 
-        T_model = t_exp - 273.15
-        V_model = y_fit / V0
-        T_exp_c = t_exp - 273.15
-        V_exp = y_exp / V0
-
-# 页面设置（放最上面）
-st.set_page_config(layout="wide")
-
-
-# ===== 图1 =====
-fig1, ax1 = plt.subplots(figsize=(5, 3))
-ax1.plot(T_model, V_model, 'b-', label=f"Model (R²={R2:.4f})")
-ax1.plot(T_exp_c, V_exp, 'ro', label="Data")
-ax1.set_xlabel("Temperature (°C)")
-ax1.set_ylabel("Normalized Volume")
-ax1.invert_xaxis()
-ax1.legend()
-
-
-# ===== 图2 =====
-fig2, ax2 = plt.subplots(figsize=(5, 3))
-ax2.plot(T_exp_c, residual, 'ko-')
-ax2.axhline(0, linestyle="--")
-ax2.set_xlabel("Temperature (°C)")
-ax2.set_ylabel("Residual")
-ax2.invert_xaxis()
-
-
-# ===== 并排显示 =====
-col1, col2 = st.columns(2)
-
-with col1:
-    st.pyplot(fig1, use_container_width=True)
-
-with col2:
-    st.pyplot(fig2, use_container_width=True)
-
+        # Export table
         export_df = pd.DataFrame({
-            "T_model_C": T_model,
-            "V_model_norm": V_model,
-            "T_exp_C": T_exp_c,
-            "V_exp_norm": V_exp,
+            "Temperature_C": T_exp_c,
+            "Experimental_Volume": y_exp,
+            "Fitted_Volume": y_fit,
+            "Experimental_Normalized_Volume": V_exp_norm,
+            "Fitted_Normalized_Volume": V_model_norm,
             "Residual": residual
         })
 
         st.subheader("Fitted data")
-        st.dataframe(export_df)
+        st.dataframe(export_df, use_container_width=True)
 
         csv_data = export_df.to_csv(index=False).encode("utf-8")
         st.download_button(
