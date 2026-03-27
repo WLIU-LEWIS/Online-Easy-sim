@@ -224,7 +224,7 @@ if run_fit:
         T_exp_c = t_exp - 273.15
         V_exp = y_exp / V0
 
-        fig1, ax1 = plt.subplots(figsize=(3, 5))
+        fig1, ax1 = plt.subplots(figsize=(5, 3.5))
         ax1.plot(T_model, V_model, 'b-', label=f"Model simulation (R²={R2:.4f})")
         ax1.plot(T_exp_c, V_exp, 'ro', label="DSC data")
         ax1.set_xlabel("Temperature (°C)")
@@ -232,16 +232,16 @@ if run_fit:
         ax1.set_ylim([0.5, 1.1])
         ax1.invert_xaxis()
         ax1.legend(loc="best")
-        st.pyplot(fig1)
+        st.pyplot(fig1, use_container_width=False)
 
         residual = y_exp - y_fit
-        fig2, ax2 = plt.subplots(figsize=(3, 4))
+        fig2, ax2 = plt.subplots(figsize=(5, 3.5))
         ax2.plot(T_exp_c, residual, 'ko-')
         ax2.axhline(0, linestyle="--")
         ax2.set_xlabel("Temperature (°C)")
         ax2.set_ylabel("Residual")
         ax2.invert_xaxis()
-        st.pyplot(fig2)
+        st.pyplot(fig2, use_container_width=False)
 
         export_df = pd.DataFrame({
             "T_model_C": T_model,
