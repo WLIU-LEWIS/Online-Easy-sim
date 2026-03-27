@@ -224,24 +224,37 @@ if run_fit:
         T_exp_c = t_exp - 273.15
         V_exp = y_exp / V0
 
-        fig1, ax1 = plt.subplots(figsize=(5, 3.5))
-        ax1.plot(T_model, V_model, 'b-', label=f"Model simulation (R²={R2:.4f})")
-        ax1.plot(T_exp_c, V_exp, 'ro', label="DSC data")
-        ax1.set_xlabel("Temperature (°C)")
-        ax1.set_ylabel("Normalized Cell Volume (V/V0)")
-        ax1.set_ylim([0.5, 1.1])
-        ax1.invert_xaxis()
-        ax1.legend(loc="best")
-        st.pyplot(fig1, use_container_width=False)
+# 页面设置（放最上面）
+st.set_page_config(layout="wide")
 
-        residual = y_exp - y_fit
-        fig2, ax2 = plt.subplots(figsize=(5, 3.5))
-        ax2.plot(T_exp_c, residual, 'ko-')
-        ax2.axhline(0, linestyle="--")
-        ax2.set_xlabel("Temperature (°C)")
-        ax2.set_ylabel("Residual")
-        ax2.invert_xaxis()
-        st.pyplot(fig2, use_container_width=False)
+
+# ===== 图1 =====
+fig1, ax1 = plt.subplots(figsize=(5, 3))
+ax1.plot(T_model, V_model, 'b-', label=f"Model (R²={R2:.4f})")
+ax1.plot(T_exp_c, V_exp, 'ro', label="Data")
+ax1.set_xlabel("Temperature (°C)")
+ax1.set_ylabel("Normalized Volume")
+ax1.invert_xaxis()
+ax1.legend()
+
+
+# ===== 图2 =====
+fig2, ax2 = plt.subplots(figsize=(5, 3))
+ax2.plot(T_exp_c, residual, 'ko-')
+ax2.axhline(0, linestyle="--")
+ax2.set_xlabel("Temperature (°C)")
+ax2.set_ylabel("Residual")
+ax2.invert_xaxis()
+
+
+# ===== 并排显示 =====
+col1, col2 = st.columns(2)
+
+with col1:
+    st.pyplot(fig1, use_container_width=True)
+
+with col2:
+    st.pyplot(fig2, use_container_width=True)
 
         export_df = pd.DataFrame({
             "T_model_C": T_model,
