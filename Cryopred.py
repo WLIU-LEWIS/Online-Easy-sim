@@ -1,0 +1,426 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+from scipy.optimize import least_squares
+
+
+# =========================
+# Page config
+# =========================
+st.set_page_config(
+    page_title="CryoPermFit",
+    layout="wide"
+)
+
+
+# =========================
+# ODE model
+# =========================
+def kinetic_eqs(t, y, k, cooling_rate):
+    """
+    y[0]: cell volume
+    k[0]: a
+    k[1]: b
+    cooling_rate: e
+    """
+    c = 155.22
+    d = 8.314
+    e = cooling_rate
+    f = 18e12
+    g = 109.86
+    h = 2.0
+    ii = 3.33e-13
+    jj = 333.88
+    kk = 1e-12
+    l = 273.15
+    m = 4.66e-14
+    p = 7.103e13
+
+    vol = y[0]
+
+    numerator = vol - g - m * p
+    denominator = vol - g - m * p + h * ii / f
+
+    eps = 1e-12
+    if numerator <= eps:
+        numerator = eps
+    if denominator <= eps:
+        denominator = eps
+    if t <= eps:
+        t = eps
+    if e <= eps:
+        e = eps
+
+    dydt = (
+        1e18 * k[0] * c * d * t *
+        np.exp(-k[1] / d * (1.0 / t - 1.0 / l)) /
+        (e * f) *
+        (
+            np.log(numerator / denominator)
+            - (jj * f * kk / d) * (1.0 / l - 1.0 / t)
+        )
+    )
+
+    return [dydt]
+
+
+# =========================
+# Simulation
+# =========================
+def simulate(k, t_eval, x0, cooling_rate):
+    sol = solve_ivp(
+        fun=lambda t, y: kinetic_eqs(t, y, k, cooling_rate),
+        t_span=(t_eval[0], t_eval[-1]),
+        y0=x0,
+        t_eval=t_eval,
+        method="RK45",
+        rtol=1e-8,
+        atol=1e-10
+    )
+
+    if not sol.success:
+        raise RuntimeError(sol.message)
+
+    return sol.t, sol.y.T
+
+
+# =========================
+# Objective function
+# =========================
+def objective_function(k, t_exp, y_exp, x0, fit_cooling_rate):
+    try:
+        _, X = simulate(k, t_exp, x0, fit_cooling_rate)
+        y_model = X[:, 0]
+
+        if np.any(np.isnan(y_model)) or np.any(np.isinf(y_model)):
+            return np.ones_like(y_exp) * 1e6
+
+        return y_model - y_exp
+    except Exception:
+        return np.ones_like(y_exp) * 1e6
+
+
+# =========================
+# Statistics
+# =========================
+def calc_statistics(y_true, y_pred):
+    R = np.corrcoef(y_true, y_pred)[0, 1]
+    R2 = 1 - np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2)
+    RMSE = np.sqrt(np.mean((y_true - y_pred) ** 2))
+    SSE = np.sum((y_true - y_pred) ** 2)
+    return R, R2, RMSE, SSE
+
+
+# =========================
+# Parse pasted data
+# =========================
+def parse_pasted_data(text):
+    text = text.strip()
+    if not text:
+        raise ValueError("No data pasted.")
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    rows = []
+
+    for line in lines:
+        if "\t" in line:
+            parts = line.split("\t")
+        elif "," in line:
+            parts = line.split(",")
+        else:
+            parts = line.split()
+
+        if len(parts) < 2:
+            continue
+
+        try:
+            t_val = float(parts[0])
+            y_val = float(parts[1])
+            rows.append([t_val, y_val])
+        except ValueError:
+            continue
+
+    if len(rows) < 2:
+        raise ValueError("Need at least two valid numeric rows.")
+
+    df = pd.DataFrame(rows, columns=["Temperature_K", "Volume"])
+    return df
+
+
+# =========================
+# Parse cooling rates
+# =========================
+def parse_cooling_rates(text):
+    text = text.strip()
+    if not text:
+        return []
+
+    parts = text.replace("\n", ",").replace(";", ",").split(",")
+    rates = []
+
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            val = float(p)
+            if val > 0:
+                rates.append(val)
+        except ValueError:
+            continue
+
+    # 去重并保持顺序
+    unique_rates = []
+    for r in rates:
+        if r not in unique_rates:
+            unique_rates.append(r)
+
+    return unique_rates
+
+
+# =========================
+# Default experimental data
+# =========================
+default_text = """267.99\t181.84
+267.15\t178.1667916
+266.15\t169.1173019
+265.15\t165.6389179
+264.15\t158.7959802
+263.15\t153.0628855
+262.15\t148.6300803
+261.15\t145.460351
+260.15\t142.0739067
+259.15\t139.1362156
+258.15\t136.3911599
+257.15\t133.6439152
+256.15\t130.7784624
+255.15\t127.8101247
+254.15\t124.9271595
+253.15\t122.1842929
+252.15\t119.7128672
+251.15\t117.5194495
+250.15\t115.5033441
+249.15\t113.730222
+248.15\t112.3445599
+247.15\t111.2478511
+246.15\t110.4510407
+245.15\t109.9891533
+244.15\t109.8490548"""
+
+
+# =========================
+# UI
+# =========================
+st.title("CryoPermFit")
+st.write("A tool for estimating osmotic transport parameters of cells at cryogenic conditions and predicting volume change under different cooling rates.")
+
+st.sidebar.header("Input parameters")
+
+a0 = st.sidebar.number_input(
+    "Initial guess: a",
+    value=5.68037900e-08,
+    format="%.8e"
+)
+
+b0 = st.sidebar.number_input(
+    "Initial guess: b",
+    value=8.74400015e+04,
+    format="%.8e"
+)
+
+V0 = st.sidebar.number_input(
+    "Initial volume x0",
+    value=181.84,
+    format="%.5f"
+)
+
+fit_cooling_rate = st.sidebar.number_input(
+    "Cooling rate used for fitting (e)",
+    value=5.0,
+    format="%.4f"
+)
+
+st.subheader("Paste experimental data")
+st.caption("Paste two columns: Temperature(K) and Volume. Supports tab, comma, or space separated values.")
+
+data_text = st.text_area(
+    "Experimental data",
+    value=default_text,
+    height=320
+)
+
+st.subheader("Prediction under new cooling rates")
+st.caption("Enter one or more cooling rates separated by commas. Example: 1, 5, 10, 20")
+
+prediction_rates_text = st.text_input(
+    "Cooling rates for prediction",
+    value="1, 5, 10, 20"
+)
+
+run_fit = st.button("Start Fitting and Prediction")
+
+
+# =========================
+# Run fitting
+# =========================
+if run_fit:
+    try:
+        data = parse_pasted_data(data_text)
+        t_exp = data["Temperature_K"].values
+        y_exp = data["Volume"].values
+
+        if len(t_exp) < 2:
+            st.error("Please provide at least two rows of valid data.")
+            st.stop()
+
+        x0 = np.array([V0], dtype=float)
+        k0 = np.array([a0, b0], dtype=float)
+
+        prediction_rates = parse_cooling_rates(prediction_rates_text)
+        if len(prediction_rates) == 0:
+            st.error("Please enter at least one valid cooling rate for prediction.")
+            st.stop()
+
+        with st.spinner("Running fitting and prediction..."):
+            result = least_squares(
+                fun=objective_function,
+                x0=k0,
+                args=(t_exp, y_exp, x0, fit_cooling_rate),
+                method="trf",
+                max_nfev=10000
+            )
+
+            k_fit = result.x
+            _, X_fit = simulate(k_fit, t_exp, x0, fit_cooling_rate)
+            y_fit = X_fit[:, 0]
+
+            R, R2, RMSE, SSE = calc_statistics(y_exp, y_fit)
+
+        st.success("Fitting completed.")
+
+        stat_col1, stat_col2 = st.columns(2)
+
+        with stat_col1:
+            st.subheader("Fitted parameters")
+            st.dataframe(
+                pd.DataFrame({
+                    "Parameter": ["a", "b"],
+                    "Value": [k_fit[0], k_fit[1]]
+                }),
+                use_container_width=True
+            )
+
+        with stat_col2:
+            st.subheader("Statistics")
+            st.dataframe(
+                pd.DataFrame({
+                    "Metric": ["R", "R²", "RMSE", "SSE"],
+                    "Value": [R, R2, RMSE, SSE]
+                }),
+                use_container_width=True
+            )
+
+        # Experimental fit plot data
+        T_fit_c = t_exp - 273.15
+        V_fit_norm = y_fit / V0
+        V_exp_norm = y_exp / V0
+        residual = y_exp - y_fit
+
+        st.subheader("Fitting Results")
+
+        fig1, ax1 = plt.subplots(figsize=(5, 3.2))
+        ax1.plot(T_fit_c, V_fit_norm, 'b-', linewidth=1.8, label=f"Model fit (R²={R2:.4f})")
+        ax1.plot(T_fit_c, V_exp_norm, 'ro', markersize=5, label="Experimental data")
+        ax1.set_xlabel("Temperature (°C)", fontsize=10)
+        ax1.set_ylabel("Normalized Cell Volume (V/V0)", fontsize=10)
+        ax1.set_ylim([0.5, 1.1])
+        ax1.invert_xaxis()
+        ax1.tick_params(labelsize=9)
+        ax1.legend(fontsize=9, loc="best")
+        fig1.tight_layout()
+
+        fig2, ax2 = plt.subplots(figsize=(5, 3.2))
+        ax2.plot(T_fit_c, residual, 'ko-', linewidth=1.4, markersize=4)
+        ax2.axhline(0, linestyle="--", linewidth=1.2)
+        ax2.set_xlabel("Temperature (°C)", fontsize=10)
+        ax2.set_ylabel("Residual", fontsize=10)
+        ax2.invert_xaxis()
+        ax2.tick_params(labelsize=9)
+        fig2.tight_layout()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.pyplot(fig1, use_container_width=True)
+        with col2:
+            st.pyplot(fig2, use_container_width=True)
+
+        # =========================
+        # Prediction plot
+        # =========================
+        st.subheader("Predicted volume change under different cooling rates")
+
+        t_pred = np.linspace(t_exp.max(), t_exp.min(), 300)
+
+        fig3, ax3 = plt.subplots(figsize=(7, 4))
+        prediction_export = pd.DataFrame({"Temperature_C": t_pred - 273.15})
+
+        for rate in prediction_rates:
+            _, X_pred = simulate(k_fit, t_pred, x0, rate)
+            y_pred = X_pred[:, 0]
+            y_pred_norm = y_pred / V0
+
+            ax3.plot(
+                t_pred - 273.15,
+                y_pred_norm,
+                linewidth=1.8,
+                label=f"e = {rate:g}"
+            )
+
+            prediction_export[f"Normalized_Volume_e_{rate:g}"] = y_pred_norm
+            prediction_export[f"Volume_e_{rate:g}"] = y_pred
+
+        ax3.set_xlabel("Temperature (°C)", fontsize=10)
+        ax3.set_ylabel("Normalized Cell Volume (V/V0)", fontsize=10)
+        ax3.invert_xaxis()
+        ax3.tick_params(labelsize=9)
+        ax3.legend(fontsize=9, loc="best")
+        fig3.tight_layout()
+
+        st.pyplot(fig3, use_container_width=True)
+
+        # Export fitted data
+        fit_export_df = pd.DataFrame({
+            "Temperature_C": T_fit_c,
+            "Experimental_Volume": y_exp,
+            "Fitted_Volume": y_fit,
+            "Experimental_Normalized_Volume": V_exp_norm,
+            "Fitted_Normalized_Volume": V_fit_norm,
+            "Residual": residual
+        })
+
+        st.subheader("Fitted data")
+        st.dataframe(fit_export_df, use_container_width=True)
+
+        csv_fit = fit_export_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download fitted data as CSV",
+            data=csv_fit,
+            file_name="CryoPermFit_fitted_results.csv",
+            mime="text/csv"
+        )
+
+        st.subheader("Predicted data under different cooling rates")
+        st.dataframe(prediction_export, use_container_width=True)
+
+        csv_pred = prediction_export.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download prediction curves as CSV",
+            data=csv_pred,
+            file_name="CryoPermFit_prediction_curves.csv",
+            mime="text/csv"
+        )
+
+    except Exception as e:
+        st.error(f"Error: {e}")
