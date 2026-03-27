@@ -200,7 +200,7 @@ def fit_model():
         "T_exp_C": T_exp_c,
         "V_exp_norm": V_exp
     })
-    export_df.to_excel("abd.xlsx", index=False)
+    #export_df.to_excel("abd.xlsx", index=False)
 
     return result, k_fit, stats, export_df
 
